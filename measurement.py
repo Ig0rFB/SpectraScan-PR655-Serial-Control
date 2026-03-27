@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 
 # --- Configuration ---
-SERIAL_PORT = 'COM4'  # Update this to your instrument's COM port
+SERIAL_PORT = 'COM4' if __import__("platform").system() == "Windows" else '/dev/tty.usbserial'
 BAUD_RATE = 9600
 TIMEOUT = 20          # Increased timeout as D6 can be a large data packet
 PRE_TRIGGER_DELAY_S = 0
@@ -41,45 +41,70 @@ COLORCHECKER_PATCHES = [
 
 
 def choose_patch_sequence() -> list[tuple[int, str, tuple[int, int, int]]]:
-    """Prompt user to capture all patches or a single patch by number/name."""
-    prompt = (
-        "Capture mode - press Enter for all patches, or type patch number (1-24) "
-        "or patch name (e.g. Orange): "
-    )
-    selection = input(prompt).strip()
-
+    """Prompt user to choose all patches or a single patch in ColorChecker mode."""
     indexed = [
         (i, name, rgb)
         for i, (name, rgb) in enumerate(COLORCHECKER_PATCHES, start=1)
     ]
-    if selection == "":
-        return indexed
 
-    if selection.isdigit():
-        idx = int(selection)
-        if 1 <= idx <= len(COLORCHECKER_PATCHES):
-            name, rgb = COLORCHECKER_PATCHES[idx - 1]
-            return [(idx, name, rgb)]
-        print(f"Invalid patch number: {selection}. Falling back to all patches.")
-        return indexed
+    while True:
+        selection = input(
+            "\n--- ColorChecker Measurement ---\n"
+            "Select capture scope:\n"
+            "  [A] All patches (1-24)\n"
+            "  [S] Single patch\n"
+            "  [Q] Back to main menu\n"
+            "Choice: "
+        ).strip().lower()
 
-    normalized = selection.casefold()
-    for idx, name, rgb in indexed:
-        if name.casefold() == normalized:
-            return [(idx, name, rgb)]
+        if selection == "a":
+            return indexed
 
-    print(f"Unknown patch name: {selection!r}. Falling back to all patches.")
-    return indexed
+        if selection == "s":
+            patch_selection = input(
+                "Enter patch number (1-24) or patch name (e.g. Orange): "
+            ).strip()
+
+            if patch_selection.isdigit():
+                idx = int(patch_selection)
+                if 1 <= idx <= len(COLORCHECKER_PATCHES):
+                    name, rgb = COLORCHECKER_PATCHES[idx - 1]
+                    return [(idx, name, rgb)]
+                print(f"Invalid patch number: {patch_selection}. Please try again.")
+                continue
+
+            normalized = patch_selection.casefold()
+            for idx, name, rgb in indexed:
+                if name.casefold() == normalized:
+                    return [(idx, name, rgb)]
+
+            print(f"Unknown patch name: {patch_selection!r}. Please try again.")
+            continue
+
+        if selection == "q":
+            return []
+
+        print("Invalid choice. Please select A, S, or Q.")
 
 
 def choose_measurement_workflow() -> str:
-    """Choose between standard ColorChecker flow and one-off custom measurement."""
-    selection = input(
-        "Workflow - press Enter for ColorChecker, or type C for Custom measurement: "
-    ).strip().lower()
-    if selection == "c":
-        return "custom"
-    return "colorchecker"
+    """Choose measurement mode from the main menu."""
+    while True:
+        selection = input(
+            "\n=== Spectral Measurement Menu ===\n"
+            "Select mode:\n"
+            "  [S] Single measurement\n"
+            "  [C] ColorChecker chart measurement\n"
+            "  [Q] Quit\n"
+            "Choice: "
+        ).strip().lower()
+        if selection == "s":
+            return "single"
+        if selection == "c":
+            return "colorchecker"
+        if selection == "q":
+            return "quit"
+        print("Invalid choice. Please select S, C, or Q.")
 
 
 def read_response(ser: serial.Serial, timeout_s: float = TIMEOUT) -> str:
@@ -418,7 +443,14 @@ def custom_measurement(ser: serial.Serial) -> bool:
 def run_spectral_test():
     try:
         workflow = choose_measurement_workflow()
+        if workflow == "quit":
+            print("No measurement selected. Exiting.")
+            return
+
         selected_patches = choose_patch_sequence() if workflow == "colorchecker" else []
+        if workflow == "colorchecker" and not selected_patches:
+            print("ColorChecker measurement cancelled. Exiting.")
+            return
 
         with serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=TIMEOUT) as ser:
             print(f"Initialising connection on {SERIAL_PORT}...")
@@ -430,7 +462,7 @@ def run_spectral_test():
             print("Entering remote mode...")
             enter_remote_mode(ser)
 
-            if workflow == "custom":
+            if workflow == "single":
                 custom_measurement(ser)
                 send_command(ser, "Q", line_ending="\r", wait_for_response=False)
                 print("Session complete. Instrument returned to local mode.")
